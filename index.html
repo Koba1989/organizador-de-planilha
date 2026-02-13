@@ -314,8 +314,7 @@
 
         function extractPhones(text) {
             if (!text) return "";
-            // Regex "Trator": Captura qualquer coisa que pareça um telefone brasileiro, mesmo com espaços estranhos
-            // Ex: +55 (15) 9 9770-4996, (41) 99701-1650, 11 99999 9999
+            // Regex "Trator": Captura qualquer coisa que pareça um telefone brasileiro
             const candidates = text.toString().match(/(?:(?:\+|00)?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{3,5}[\s-]?\d{4}/g) || [];
             
             const validPhones = new Set();
@@ -348,48 +347,73 @@
             return Array.from(validPhones).join(' / ');
         }
 
+        // FIXED: parseLineText revertido para varredura total, corrigindo o problema de "Colar"
         function parseLineText(line) {
             if (!line || !line.trim()) return null;
-            let original = line;
+            
+            // 1. Extração de Telefones "Trator" na linha inteira (Prioridade Máxima)
+            // Isso garante que telefones sejam encontrados independente da posição ou formatação
+            let celular = extractPhones(line); 
+
+            // 2. Limpeza para extração de outros campos
+            // Removemos os telefones encontrados da linha para evitar confusão com nomes/cargos
+            let cleanedLine = line;
+            if (celular) {
+                // Regex simplificado para remover o que parece telefone do texto original
+                cleanedLine = line.replace(/(?:(?:\+|00)?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{3,5}[\s-]?\d{4}/g, "   ");
+            }
+
+            // 3. Extração de Email, CNPJ, Linkedin (Regex)
             const regexes = { 
                 email: /[\w.-]+@[\w.-]+\.\w+/, 
                 cnpj: /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14}/, 
-                phoneStrict: /\(?\d{2}\)?\d{4,5}\d{4}/g, 
                 linkedin: /linkedin\.com\/[a-zA-Z0-9%-]+/ 
             };
-            let email = (line.match(regexes.email)||[""])[0]; if(email) line = line.replace(email, " ");
-            let cnpj = (line.match(regexes.cnpj)||[""])[0]; if(cnpj) line = line.replace(cnpj, " ");
-            let linkedin = (line.match(regexes.linkedin)||[""])[0]; if(linkedin) line = line.replace(linkedin, " ");
-            let celular = extractPhones(line); // Usa o novo extrator robusto
-            line = line.replace(/\s+/g, ' ').trim();
+            
+            let email = (cleanedLine.match(regexes.email)||[""])[0]; if(email) cleanedLine = cleanedLine.replace(email, " ");
+            let cnpj = (cleanedLine.match(regexes.cnpj)||[""])[0]; if(cnpj) cleanedLine = cleanedLine.replace(cnpj, " ");
+            let linkedin = (cleanedLine.match(regexes.linkedin)||[""])[0]; if(linkedin) cleanedLine = cleanedLine.replace(linkedin, " ");
+            
+            cleanedLine = cleanedLine.replace(/\s+/g, ' ').trim();
+            
+            // 4. Extração de Cargo e Nome (Baseado em Whitelist)
             let nome = "", cargo = "";
-            let upperLine = line.toUpperCase();
+            let upperLine = cleanedLine.toUpperCase();
             let cargoStartIdx = -1;
+
             for (let role of ROLES_WHITELIST) {
                 let idx = upperLine.indexOf(role);
                 if (idx !== -1 && (cargoStartIdx === -1 || idx < cargoStartIdx)) {
                     cargoStartIdx = idx;
                 }
             }
+
             if (cargoStartIdx !== -1) {
-                nome = line.substring(0, cargoStartIdx).trim();
-                let rawCargo = line.substring(cargoStartIdx).trim();
+                nome = cleanedLine.substring(0, cargoStartIdx).trim();
+                let rawCargo = cleanedLine.substring(cargoStartIdx).trim();
                 cargo = cleanCargoField(rawCargo);
             } else {
-                let parts = line.split(/[;\t|\-–]/).map(p => p.trim());
+                // Se não achou cargo, tenta separar por TAB ou delimitadores comuns
+                let parts = cleanedLine.split(/[;\t|\-–]/).map(p => p.trim());
                 if (parts.length > 1) {
                     nome = parts[0];
                     cargo = cleanCargoField(parts.slice(1).join(" "));
                 } else {
-                    nome = line;
+                    nome = cleanedLine;
                     cargo = "Indefinido";
                 }
             }
+
+            // Remove vírgulas soltas do início/fim do nome que podem ter sobrado de um CSV
+            nome = nome.replace(/^[,]+|[,]+$/g, '').trim();
+
             nome = formatarNome(nome);
             if (!nome || nome.length < 2) return null;
+
             return { id: Math.random().toString(36).substr(2, 9), email, nome, cargo, linkedin, celular, cidade: "", uf: "", cnpj, manualStatus: null };
         }
 
+        // Novo Parseador Estruturado (Para Excel/CSV com colunas)
         function parseRowStructured(row, headers) {
             const idx = {
                 nome: headers.findIndex(h => h.match(/nome|cliente/i)),
@@ -400,18 +424,23 @@
                 empresa: headers.findIndex(h => h.match(/empresa/i)),
                 linkedin: headers.findIndex(h => h.match(/linkedin/i))
             };
+
+            // Se não achou colunas essenciais, falha para o parser de texto
             if (idx.nome === -1 && idx.email === -1) return parseLineText(row.join(" "));
+
             let nome = idx.nome !== -1 ? (row[idx.nome] || "") : "";
             let email = idx.email !== -1 ? (row[idx.email] || "") : "";
             let cargoRaw = idx.cargo !== -1 ? (row[idx.cargo] || "") : "";
             let telRaw = idx.telefone !== -1 ? (row[idx.telefone] || "") : "";
             let cnpj = idx.cnpj !== -1 ? (row[idx.cnpj] || "") : "";
             let linkedin = idx.linkedin !== -1 ? (row[idx.linkedin] || "") : "";
-            
+
+            // --- CORREÇÃO DE NOME DE EMPRESA NO CAMPO NOME ---
             if (isCorporateName(nome)) {
                 const backupCols = headers.map((h, i) => i).filter(i => 
                     headers[i].match(/contato|comprador|responsavel|socio/i) && i !== idx.nome
                 );
+                
                 let foundPerson = false;
                 for (let i of backupCols) {
                     let potentialName = row[i];
@@ -422,13 +451,17 @@
                     }
                 }
             }
+
             if (!nome && headers.findIndex(h => h.match(/comprador/i)) !== -1) {
                 nome = row[headers.findIndex(h => h.match(/comprador/i))] || "";
             }
+
             nome = formatarNome(nome);
             if (!nome || nome.length < 2) return null;
+
             let cargo = cleanCargoField(cargoRaw);
             let celular = extractPhones(telRaw);
+
             return { id: Math.random().toString(36).substr(2, 9), email, nome, cargo, linkedin, celular, cidade: "", uf: "", cnpj, manualStatus: null };
         }
 
