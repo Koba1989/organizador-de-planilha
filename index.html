@@ -70,7 +70,7 @@
 
         .dropdown-content { display: none; position: absolute; background-color: white; min-width: 340px; box-shadow: 0px 20px 40px -5px rgba(0,0,0,0.25); z-index: 100; border-radius: 1.5rem; max-height: 550px; overflow: hidden; border: 1px solid #e2e8f0; }
         .dropdown-content.show { display: flex; flex-direction: column; }
-        [contenteditable]:focus { outline: 2px solid #8b5cf6; background-color: white; border-radius: 4px; padding: 2px; }
+        [contenteditable]:focus { outline: 2px solid #8b5cf6; background-color: white; border-radius: 4px; padding: 4px; }
         
         .error-row { background-color: #fff1f2 !important; border-left: 4px solid #f43f5e !important; }
         .error-badge { font-size: 9px; padding: 2px 6px; border-radius: 4px; background-color: #fee2e2; color: #ef4444; border: 1px solid #fca5a5; white-space: nowrap; margin-right: 4px; display: inline-block; margin-bottom: 2px; }
@@ -341,15 +341,12 @@
         function parseLineText(line) {
             if (!line || !line.trim()) return null;
             let original = line;
-            // 1. Scanner de telefones
             let celular = extractPhones(line); 
             let cleanedLine = line;
             if (celular) {
-                // Remover telefones para limpar a string
                 cleanedLine = line.replace(/(?:(?:\+|00)?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{3,5}[\s-]?\d{4}/g, "   ");
             }
 
-            // 2. Extração via Regex
             const regexes = { 
                 email: /[\w.-]+@[\w.-]+\.\w+/, 
                 cnpj: /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14}/, 
@@ -387,7 +384,6 @@
                 }
             }
 
-            // Remove vírgulas soltas
             nome = nome.replace(/^[,]+|[,]+$/g, '').trim();
             nome = formatarNome(nome);
             if (!nome || nome.length < 2) return null;
@@ -553,7 +549,7 @@
 
         async function renderHistoryList() {
             const list = document.getElementById('history-list'); if (!list) return;
-            const user = window.currentUser; if (!user) return;
+            const user = window.currentUser || auth.currentUser; if (!user) return;
             const { db, appId, collection, onSnapshot } = window.firebase;
             onSnapshot(collection(db, `artifacts/${appId}/users/${user.uid}/history`), (snapshot) => {
                 list.innerHTML = '';
@@ -562,7 +558,6 @@
                 items.sort((a, b) => b.timestamp - a.timestamp);
                 if(!items.length) { list.innerHTML = '<div class="text-center py-10 text-slate-400 text-xs italic">Vazio</div>'; return; }
                 items.forEach(i => {
-                    // Decide what to show for count: either stored 'count' or calculate from data length if old
                     const displayCount = i.count !== undefined ? i.count : (i.data ? i.data.length : 0);
                     
                     const div = document.createElement('div');
@@ -586,14 +581,10 @@
         }
 
         async function addToHistory(n, d, t = []) {
-            const user = window.currentUser; if (!user || d.length === 0) return;
+            const user = window.currentUser || auth.currentUser; if (!user || d.length === 0) return;
             const { db, appId, doc, setDoc } = window.firebase;
             const itemId = Date.now().toString();
             try {
-                // SMART HISTORY LOGIC:
-                // Only save Metadata (Name, Date, Counts, Tags)
-                // DO NOT save the full 'd' array (data)
-                
                 const validCount = d.filter(r => !r.hasError).length;
                 const errorCount = d.filter(r => r.hasError).length;
 
@@ -602,7 +593,6 @@
                     name: n, 
                     date: new Date().toLocaleString('pt-BR'), 
                     timestamp: Date.now(), 
-                    // No 'data' field!
                     tags: t, 
                     count: d.length,
                     validCount: validCount,
@@ -624,15 +614,12 @@
         }
 
         function loadHistoryItem(id, dataObject) {
-            // Restore Filters
             selectedCargos.clear(); 
             (dataObject.tags || []).forEach(t => selectedCargos.add(t));
             updateCargoFilterOptions(); 
             updateFilterBadge();
             
-            // Check if it's an old full save or a new smart save
             if (dataObject.data && dataObject.data.length > 0) {
-                // Legacy: Load data
                 rawData = dataObject.data; 
                 rawData.forEach(r => { if(r.manualStatus === undefined) r.manualStatus = null; });
                 currentFileName = dataObject.name.split(' [')[0]; 
@@ -642,9 +629,7 @@
                 document.getElementById('table-title').textContent = dataObject.name;
                 showToast("Base restaurada!");
             } else {
-                // Smart History: Just Filters
                 showToast("Filtros carregados! Importe o arquivo para aplicar.");
-                // We keep the current table data (if any) and apply the filters to it
                 if (rawData.length > 0) {
                     applyFilters();
                 }
@@ -826,8 +811,8 @@
             updateCargoCache(); updateCargoFilterOptions(); applyFilters();
             document.getElementById('table-title').textContent = n;
             showToast(`${d.length} registros extraídos!`);
-            // Removing auto-save to history on load, only save on export to keep history clean
-            // addToHistory(n, rawData); 
+            // RE-ENABLED: Save log entry on load (Smart History - Metadata only)
+            addToHistory(n, rawData); 
         }
 
         window.processManualText = () => {
@@ -838,7 +823,15 @@
 
         window.updateCell = (id, f, v) => {
             const idx = rawData.findIndex(r => r.id === id);
-            if(idx !== -1) { rawData[idx][f] = v.trim(); validateData(rawData); }
+            if(idx !== -1) { 
+                rawData[idx][f] = v.trim(); 
+                // Re-validate to update error status
+                validateData(rawData); 
+                // Force re-render to update row colors (red/white) immediately
+                renderTableChunks();
+                // Update filter counts
+                if(currentFilterMode !== 'all') applyFilters();
+            }
         }
 
         window.clearTable = () => { rawData = []; applyFilters(); updateCargoFilterOptions(); }
