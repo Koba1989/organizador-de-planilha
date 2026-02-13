@@ -5,7 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DataSheet AI - Organizador de Planilhas</title>
     
+    <!-- 1. Carrega o Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. Configura o Tailwind IMEDIATAMENTE (Antes de qualquer outra coisa) -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['"Outfit"', 'sans-serif'] },
+                    colors: {
+                        brand: { 50: '#f5f3ff', 100: '#ede9fe', 400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9', 900: '#4c1d95' },
+                        accent: { 500: '#d946ef', 600: '#c026d3' },
+                        danger: { 50: '#fef2f2', 100: '#fee2e2', 500: '#ef4444' }
+                    }
+                }
+            }
+        };
+    </script>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
@@ -39,19 +57,6 @@
             window.currentUser = user;
             if (user && typeof window.renderHistoryList === 'function') window.renderHistoryList();
         });
-
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: { sans: ['"Outfit"', 'sans-serif'] },
-                    colors: {
-                        brand: { 50: '#f5f3ff', 100: '#ede9fe', 400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9', 900: '#4c1d95' },
-                        accent: { 500: '#d946ef', 600: '#c026d3' },
-                        danger: { 50: '#fef2f2', 100: '#fee2e2', 500: '#ef4444' }
-                    }
-                }
-            }
-        };
     </script>
 
     <style>
@@ -309,6 +314,8 @@
 
         function extractPhones(text) {
             if (!text) return "";
+            // Regex "Trator": Captura qualquer coisa que pareça um telefone brasileiro, mesmo com espaços estranhos
+            // Ex: +55 (15) 9 9770-4996, (41) 99701-1650, 11 99999 9999
             const candidates = text.toString().match(/(?:(?:\+|00)?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{3,5}[\s-]?\d{4}/g) || [];
             
             const validPhones = new Set();
@@ -316,11 +323,14 @@
             candidates.forEach(part => {
                 let digits = part.replace(/\D/g, '');
                 
+                // Trata DDI 55
                 if (digits.startsWith('55') && digits.length >= 12) {
                     digits = digits.substring(2);
                 }
                 
+                // Valida tamanho (10 fixo ou 11 celular)
                 if (digits.length === 10 || digits.length === 11) {
+                    // Valida DDD básico (evita 00, 01)
                     if (parseInt(digits.substring(0, 2)) > 10) {
                         const ddd = digits.substring(0, 2);
                         const num = digits.substring(2);
@@ -338,109 +348,46 @@
             return Array.from(validPhones).join(' / ');
         }
 
-        // Updated parseLineText to handle comma separation if detected
         function parseLineText(line) {
             if (!line || !line.trim()) return null;
-            
-            // Try to detect if it's a CSV line (has multiple commas)
-            if ((line.match(/,/g) || []).length > 3) {
-               // Likely a CSV row that failed structured parsing
-               // Split by comma respecting quotes (simplified)
-               // Simple split for now as complex CSV regex is heavy
-               const parts = line.split(',');
-               // If parts look like the expected columns, try to map them
-               // Assuming standard Ploomes export order: 
-               // Nome, CNPJ, Empresa, Cliente, Telefones, Email, Cargo, Contatos...
-               // Index 0: Nome
-               // Index 1: CNPJ
-               // Index 4: Telefones
-               // Index 5: Email
-               // Index 6: Cargo
-               if (parts.length >= 7) {
-                   let nome = parts[0] || "";
-                   let email = parts[5] || "";
-                   let cargoRaw = parts[6] || "";
-                   let telRaw = parts[4] || "";
-                   let cnpj = parts[1] || "";
-                   let linkedin = ""; // Not standard
-                   
-                   // Check backups for Name if corporate
-                   if (isCorporateName(nome)) {
-                       // Try Contatos (index 7) or Comprador (index 8)
-                       let potentialName = parts[7] || parts[8];
-                       if (potentialName && !isCorporateName(potentialName) && potentialName.length > 2) {
-                           nome = potentialName;
-                       }
-                   }
-                   
-                   return {
-                       id: Math.random().toString(36).substr(2, 9),
-                       email: email.trim(),
-                       nome: formatarNome(nome),
-                       cargo: cleanCargoField(cargoRaw),
-                       linkedin: "",
-                       celular: extractPhones(telRaw),
-                       cidade: "", uf: "", 
-                       cnpj: cnpj.trim(),
-                       manualStatus: null
-                   };
-               }
-            }
-
-            // Fallback for non-CSV lines (raw copy-paste)
             let original = line;
-            // Remove extracted phones from line to avoid polluting Name/Cargo
-            let extractedPhones = extractPhones(line);
-            let cleanedLine = line;
-            if (extractedPhones) {
-                const phoneParts = extractedPhones.split(' / ');
-                // This logic is tricky because formatted phone != raw text
-                // Simpler: just use regex to remove phone-like patterns
-                cleanedLine = line.replace(/(?:(?:\+|00)?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{3,5}[\s-]?\d{4}/g, " ");
-            }
-
             const regexes = { 
                 email: /[\w.-]+@[\w.-]+\.\w+/, 
                 cnpj: /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14}/, 
+                phoneStrict: /\(?\d{2}\)?\d{4,5}\d{4}/g, 
                 linkedin: /linkedin\.com\/[a-zA-Z0-9%-]+/ 
             };
-            
-            let email = (cleanedLine.match(regexes.email)||[""])[0]; if(email) cleanedLine = cleanedLine.replace(email, " ");
-            let cnpj = (cleanedLine.match(regexes.cnpj)||[""])[0]; if(cnpj) cleanedLine = cleanedLine.replace(cnpj, " ");
-            let linkedin = (cleanedLine.match(regexes.linkedin)||[""])[0]; if(linkedin) cleanedLine = cleanedLine.replace(linkedin, " ");
-            
-            cleanedLine = cleanedLine.replace(/\s+/g, ' ').trim();
-            
+            let email = (line.match(regexes.email)||[""])[0]; if(email) line = line.replace(email, " ");
+            let cnpj = (line.match(regexes.cnpj)||[""])[0]; if(cnpj) line = line.replace(cnpj, " ");
+            let linkedin = (line.match(regexes.linkedin)||[""])[0]; if(linkedin) line = line.replace(linkedin, " ");
+            let celular = extractPhones(line); // Usa o novo extrator robusto
+            line = line.replace(/\s+/g, ' ').trim();
             let nome = "", cargo = "";
-            let upperLine = cleanedLine.toUpperCase();
+            let upperLine = line.toUpperCase();
             let cargoStartIdx = -1;
-
             for (let role of ROLES_WHITELIST) {
                 let idx = upperLine.indexOf(role);
                 if (idx !== -1 && (cargoStartIdx === -1 || idx < cargoStartIdx)) {
                     cargoStartIdx = idx;
                 }
             }
-
             if (cargoStartIdx !== -1) {
-                nome = cleanedLine.substring(0, cargoStartIdx).trim();
-                let rawCargo = cleanedLine.substring(cargoStartIdx).trim();
+                nome = line.substring(0, cargoStartIdx).trim();
+                let rawCargo = line.substring(cargoStartIdx).trim();
                 cargo = cleanCargoField(rawCargo);
             } else {
-                let parts = cleanedLine.split(/[;\t|\-–]/).map(p => p.trim());
+                let parts = line.split(/[;\t|\-–]/).map(p => p.trim());
                 if (parts.length > 1) {
                     nome = parts[0];
                     cargo = cleanCargoField(parts.slice(1).join(" "));
                 } else {
-                    nome = cleanedLine;
+                    nome = line;
                     cargo = "Indefinido";
                 }
             }
-
             nome = formatarNome(nome);
             if (!nome || nome.length < 2) return null;
-
-            return { id: Math.random().toString(36).substr(2, 9), email, nome, cargo, linkedin, celular: extractedPhones, cidade: "", uf: "", cnpj, manualStatus: null };
+            return { id: Math.random().toString(36).substr(2, 9), email, nome, cargo, linkedin, celular, cidade: "", uf: "", cnpj, manualStatus: null };
         }
 
         function parseRowStructured(row, headers) {
@@ -448,15 +395,12 @@
                 nome: headers.findIndex(h => h.match(/nome|cliente/i)),
                 email: headers.findIndex(h => h.match(/e-?mail/i)),
                 cargo: headers.findIndex(h => h.match(/cargo|função|role/i)),
-                telefone: headers.findIndex(h => h.match(/telefones?|celular|mobile|phone/i)), // Removed generic 'contato' to prioritize explicit phone columns
+                telefone: headers.findIndex(h => h.match(/telefones?|celular|contato/i)),
                 cnpj: headers.findIndex(h => h.match(/cnpj/i)),
-                empresa: headers.findIndex(h => h.match(/^empresa$/i)), // Strict match for Empresa to avoid CNPJ column
+                empresa: headers.findIndex(h => h.match(/empresa/i)),
                 linkedin: headers.findIndex(h => h.match(/linkedin/i))
             };
-
-            // If we can't find basic columns, assume headerless or misaligned, fallback to text parser
-            if (idx.nome === -1 && idx.email === -1) return parseLineText(row.join(","));
-
+            if (idx.nome === -1 && idx.email === -1) return parseLineText(row.join(" "));
             let nome = idx.nome !== -1 ? (row[idx.nome] || "") : "";
             let email = idx.email !== -1 ? (row[idx.email] || "") : "";
             let cargoRaw = idx.cargo !== -1 ? (row[idx.cargo] || "") : "";
@@ -478,17 +422,13 @@
                     }
                 }
             }
-
             if (!nome && headers.findIndex(h => h.match(/comprador/i)) !== -1) {
                 nome = row[headers.findIndex(h => h.match(/comprador/i))] || "";
             }
-
             nome = formatarNome(nome);
             if (!nome || nome.length < 2) return null;
-
             let cargo = cleanCargoField(cargoRaw);
             let celular = extractPhones(telRaw);
-
             return { id: Math.random().toString(36).substr(2, 9), email, nome, cargo, linkedin, celular, cidade: "", uf: "", cnpj, manualStatus: null };
         }
 
