@@ -314,22 +314,14 @@
 
         function extractPhones(text) {
             if (!text) return "";
-            // Regex "Trator": Captura qualquer coisa que pareça um telefone brasileiro
             const candidates = text.toString().match(/(?:(?:\+|00)?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{3,5}[\s-]?\d{4}/g) || [];
-            
             const validPhones = new Set();
-            
             candidates.forEach(part => {
                 let digits = part.replace(/\D/g, '');
-                
-                // Trata DDI 55
                 if (digits.startsWith('55') && digits.length >= 12) {
                     digits = digits.substring(2);
                 }
-                
-                // Valida tamanho (10 fixo ou 11 celular)
                 if (digits.length === 10 || digits.length === 11) {
-                    // Valida DDD básico (evita 00, 01)
                     if (parseInt(digits.substring(0, 2)) > 10) {
                         const ddd = digits.substring(0, 2);
                         const num = digits.substring(2);
@@ -343,27 +335,21 @@
                     }
                 }
             });
-            
             return Array.from(validPhones).join(' / ');
         }
 
-        // FIXED: parseLineText revertido para varredura total, corrigindo o problema de "Colar"
         function parseLineText(line) {
             if (!line || !line.trim()) return null;
-            
-            // 1. Extração de Telefones "Trator" na linha inteira (Prioridade Máxima)
-            // Isso garante que telefones sejam encontrados independente da posição ou formatação
+            let original = line;
+            // 1. Scanner de telefones
             let celular = extractPhones(line); 
-
-            // 2. Limpeza para extração de outros campos
-            // Removemos os telefones encontrados da linha para evitar confusão com nomes/cargos
             let cleanedLine = line;
             if (celular) {
-                // Regex simplificado para remover o que parece telefone do texto original
+                // Remover telefones para limpar a string
                 cleanedLine = line.replace(/(?:(?:\+|00)?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{3,5}[\s-]?\d{4}/g, "   ");
             }
 
-            // 3. Extração de Email, CNPJ, Linkedin (Regex)
+            // 2. Extração via Regex
             const regexes = { 
                 email: /[\w.-]+@[\w.-]+\.\w+/, 
                 cnpj: /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14}/, 
@@ -376,13 +362,11 @@
             
             cleanedLine = cleanedLine.replace(/\s+/g, ' ').trim();
             
-            // 4. Extração de Cargo e Nome (Baseado em Whitelist)
             let nome = "", cargo = "";
-            let upperLine = cleanedLine.toUpperCase();
             let cargoStartIdx = -1;
 
             for (let role of ROLES_WHITELIST) {
-                let idx = upperLine.indexOf(role);
+                let idx = cleanedLine.toUpperCase().indexOf(role);
                 if (idx !== -1 && (cargoStartIdx === -1 || idx < cargoStartIdx)) {
                     cargoStartIdx = idx;
                 }
@@ -393,7 +377,6 @@
                 let rawCargo = cleanedLine.substring(cargoStartIdx).trim();
                 cargo = cleanCargoField(rawCargo);
             } else {
-                // Se não achou cargo, tenta separar por TAB ou delimitadores comuns
                 let parts = cleanedLine.split(/[;\t|\-–]/).map(p => p.trim());
                 if (parts.length > 1) {
                     nome = parts[0];
@@ -404,16 +387,14 @@
                 }
             }
 
-            // Remove vírgulas soltas do início/fim do nome que podem ter sobrado de um CSV
+            // Remove vírgulas soltas
             nome = nome.replace(/^[,]+|[,]+$/g, '').trim();
-
             nome = formatarNome(nome);
             if (!nome || nome.length < 2) return null;
 
             return { id: Math.random().toString(36).substr(2, 9), email, nome, cargo, linkedin, celular, cidade: "", uf: "", cnpj, manualStatus: null };
         }
 
-        // Novo Parseador Estruturado (Para Excel/CSV com colunas)
         function parseRowStructured(row, headers) {
             const idx = {
                 nome: headers.findIndex(h => h.match(/nome|cliente/i)),
@@ -425,7 +406,6 @@
                 linkedin: headers.findIndex(h => h.match(/linkedin/i))
             };
 
-            // Se não achou colunas essenciais, falha para o parser de texto
             if (idx.nome === -1 && idx.email === -1) return parseLineText(row.join(" "));
 
             let nome = idx.nome !== -1 ? (row[idx.nome] || "") : "";
@@ -435,12 +415,10 @@
             let cnpj = idx.cnpj !== -1 ? (row[idx.cnpj] || "") : "";
             let linkedin = idx.linkedin !== -1 ? (row[idx.linkedin] || "") : "";
 
-            // --- CORREÇÃO DE NOME DE EMPRESA NO CAMPO NOME ---
             if (isCorporateName(nome)) {
                 const backupCols = headers.map((h, i) => i).filter(i => 
                     headers[i].match(/contato|comprador|responsavel|socio/i) && i !== idx.nome
                 );
-                
                 let foundPerson = false;
                 for (let i of backupCols) {
                     let potentialName = row[i];
@@ -584,6 +562,9 @@
                 items.sort((a, b) => b.timestamp - a.timestamp);
                 if(!items.length) { list.innerHTML = '<div class="text-center py-10 text-slate-400 text-xs italic">Vazio</div>'; return; }
                 items.forEach(i => {
+                    // Decide what to show for count: either stored 'count' or calculate from data length if old
+                    const displayCount = i.count !== undefined ? i.count : (i.data ? i.data.length : 0);
+                    
                     const div = document.createElement('div');
                     div.className = "bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md cursor-pointer transition-all relative group";
                     div.onclick = () => loadHistoryItem(i.docId, i);
@@ -596,7 +577,7 @@
                             ${(i.tags || []).slice(0, 3).map(t => `<span class="px-2 py-0.5 bg-brand-50 text-brand-600 rounded-md text-[9px] font-bold border border-brand-100">${t}</span>`).join('')}
                         </div>
                         <div class="flex justify-between items-center mt-3 pt-2 border-t border-slate-50">
-                            <span class="text-[10px] font-bold text-slate-400">${i.count || i.data.length} contatos</span>
+                            <span class="text-[10px] font-bold text-slate-400">${displayCount} contatos</span>
                             <button onclick="deleteHistoryItem('${i.docId}', event)" class="p-1.5 text-red-200 hover:text-red-500"><i class="fa-solid fa-trash-can"></i></button>
                         </div>`;
                     list.appendChild(div);
@@ -609,11 +590,30 @@
             const { db, appId, doc, setDoc } = window.firebase;
             const itemId = Date.now().toString();
             try {
-                if (JSON.stringify(d).length > 980000) return; 
-                await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'history', itemId), {
-                    id: itemId, name: n, date: new Date().toLocaleString('pt-BR'), timestamp: Date.now(), data: d, tags: t, count: d.length
-                });
-            } catch (e) { console.error(e); }
+                // SMART HISTORY LOGIC:
+                // Only save Metadata (Name, Date, Counts, Tags)
+                // DO NOT save the full 'd' array (data)
+                
+                const validCount = d.filter(r => !r.hasError).length;
+                const errorCount = d.filter(r => r.hasError).length;
+
+                const payload = {
+                    id: itemId, 
+                    name: n, 
+                    date: new Date().toLocaleString('pt-BR'), 
+                    timestamp: Date.now(), 
+                    // No 'data' field!
+                    tags: t, 
+                    count: d.length,
+                    validCount: validCount,
+                    errorCount: errorCount
+                };
+
+                await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'history', itemId), payload);
+            } catch (e) { 
+                console.error(e);
+                showToast("Erro ao salvar histórico.");
+            }
         }
 
         async function deleteHistoryItem(id, event) { 
@@ -624,17 +624,31 @@
         }
 
         function loadHistoryItem(id, dataObject) {
-            rawData = dataObject.data; 
-            rawData.forEach(r => { if(r.manualStatus === undefined) r.manualStatus = null; });
-            currentFileName = dataObject.name.split(' [')[0]; 
-            validateData(rawData);
+            // Restore Filters
             selectedCargos.clear(); 
             (dataObject.tags || []).forEach(t => selectedCargos.add(t));
-            updateCargoCache();
             updateCargoFilterOptions(); 
-            applyFilters();
-            document.getElementById('table-title').textContent = dataObject.name;
-            showToast("Restaurado com Filtros!");
+            updateFilterBadge();
+            
+            // Check if it's an old full save or a new smart save
+            if (dataObject.data && dataObject.data.length > 0) {
+                // Legacy: Load data
+                rawData = dataObject.data; 
+                rawData.forEach(r => { if(r.manualStatus === undefined) r.manualStatus = null; });
+                currentFileName = dataObject.name.split(' [')[0]; 
+                validateData(rawData);
+                updateCargoCache();
+                applyFilters();
+                document.getElementById('table-title').textContent = dataObject.name;
+                showToast("Base restaurada!");
+            } else {
+                // Smart History: Just Filters
+                showToast("Filtros carregados! Importe o arquivo para aplicar.");
+                // We keep the current table data (if any) and apply the filters to it
+                if (rawData.length > 0) {
+                    applyFilters();
+                }
+            }
         }
 
         function updateCargoCache() {
@@ -812,7 +826,8 @@
             updateCargoCache(); updateCargoFilterOptions(); applyFilters();
             document.getElementById('table-title').textContent = n;
             showToast(`${d.length} registros extraídos!`);
-            addToHistory(n, rawData);
+            // Removing auto-save to history on load, only save on export to keep history clean
+            // addToHistory(n, rawData); 
         }
 
         window.processManualText = () => {
