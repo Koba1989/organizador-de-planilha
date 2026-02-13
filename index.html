@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataSheet AI - Organizador de Planilhas</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        window.firebase = { db, auth, appId, doc, setDoc, getDoc, collection, onSnapshot, deleteDoc, query, orderBy };
+
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) { console.error("Auth error:", error); }
+        };
+
+        initAuth();
+        onAuthStateChanged(auth, (user) => {
+            window.currentUser = user;
+            if (user && typeof window.renderHistoryList === 'function') window.renderHistoryList();
+        });
+
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['"Outfit"', 'sans-serif'] },
+                    colors: {
+                        brand: { 50: '#f5f3ff', 100: '#ede9fe', 400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9', 900: '#4c1d95' },
+                        accent: { 500: '#d946ef', 600: '#c026d3' },
+                        danger: { 50: '#fef2f2', 100: '#fee2e2', 500: '#ef4444' }
+                    }
+                }
+            }
+        };
+    </script>
+
+    <style>
+        body { background-color: #f8fafc; background-image: radial-gradient(circle at 10% 20%, rgba(139, 92, 246, 0.05) 0%, transparent 40%), radial-gradient(circle at 90% 80%, rgba(217, 70, 239, 0.05) 0%, transparent 40%); }
+        .glass-panel { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.6); }
+        
+        .custom-scroll::-webkit-scrollbar { width: 12px; height: 12px; }
+        .custom-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 8px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 8px; border: 3px solid #f1f5f9; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
+
+        .dropdown-content { display: none; position: absolute; background-color: white; min-width: 340px; box-shadow: 0px 20px 40px -5px rgba(0,0,0,0.25); z-index: 100; border-radius: 1.5rem; max-height: 550px; overflow: hidden; border: 1px solid #e2e8f0; }
+        .dropdown-content.show { display: flex; flex-direction: column; }
+        [contenteditable]:focus { outline: 2px solid #8b5cf6; background-color: white; border-radius: 4px; padding: 2px; }
+        
+        .error-row { background-color: #fff1f2 !important; border-left: 4px solid #f43f5e !important; }
+        .error-badge { font-size: 9px; padding: 2px 6px; border-radius: 4px; background-color: #fee2e2; color: #ef4444; border: 1px solid #fca5a5; white-space: nowrap; margin-right: 4px; display: inline-block; margin-bottom: 2px; }
+        
+        tr.selected-row, tr.selected-row td { background-color: #fffac1 !important; color: #422006 !important; }
+        tr.selected-row td:first-child { box-shadow: inset 4px 0 0 #eab308; }
+        tr:hover td { background-color: #f1f5f9; cursor: pointer; }
+
+        .signature { position: fixed; bottom: 8px; right: 16px; font-size: 10px; color: #94a3b8; font-weight: 500; pointer-events: none; z-index: 0; }
+        .peer:checked ~ .peer-checked-bg { background-color: #22c55e; }
+        .peer:checked ~ .peer-checked-dot { transform: translateX(20px); }
+        
+        .filter-btn { padding: 8px 16px; font-size: 11px; font-weight: 700; border-radius: 12px; transition: all 0.2s; border: 1px solid transparent; display: flex; align-items: center; gap: 6px; background-color: white; color: #64748b; border-color: #e2e8f0; cursor: pointer; }
+        .filter-btn:hover { border-color: #cbd5e1; color: #334155; }
+        .filter-btn.active-all { background-color: #7c3aed !important; color: white !important; border-color: #7c3aed !important; box-shadow: 0 4px 12px -2px rgba(124, 58, 237, 0.3); }
+        .filter-btn.active-valid { background-color: #10b981 !important; color: white !important; border-color: #10b981 !important; box-shadow: 0 4px 12px -2px rgba(16, 185, 129, 0.3); }
+        .filter-btn.active-error { background-color: #ef4444 !important; color: white !important; border-color: #ef4444 !important; box-shadow: 0 4px 12px -2px rgba(239, 68, 68, 0.3); }
+
+        .status-toggle-btn { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+        .status-valid { background-color: #dcfce7; color: #16a34a; border: 1px solid #86efac; }
+        .status-valid:hover { background-color: #bbf7d0; }
+        .status-error { background-color: #fee2e2; color: #ef4444; border: 1px solid #fca5a5; }
+        .status-error:hover { background-color: #fecaca; }
+    </style>
+</head>
+<body class="text-slate-600 h-screen flex flex-col overflow-hidden selection:bg-brand-100 selection:text-brand-900 font-sans">
+
+    <input type="file" id="file-upload-input" class="hidden" accept=".csv, .xlsx, .xls, .pdf" onchange="handleFileUpload(event)" />
+    
+    <nav class="px-8 py-4 flex justify-between items-center z-20">
+        <div class="flex items-center gap-3 glass-panel px-4 py-2 rounded-2xl shadow-sm">
+            <div class="bg-gradient-to-r from-brand-600 to-accent-600 text-white w-9 h-9 rounded-xl flex items-center justify-center shadow-lg">
+                <i class="fa-solid fa-bolt text-base"></i>
+            </div>
+            <h1 class="font-bold text-xl text-slate-800 tracking-tight">DataSheet <span class="text-brand-600">AI</span></h1>
+        </div>
+        
+        <div class="flex gap-3 glass-panel p-1.5 rounded-xl shadow-sm">
+            <button onclick="clearTable()" class="px-4 py-2 text-xs font-bold text-slate-500 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all flex items-center gap-2">
+                <i class="fa-regular fa-trash-can"></i> Limpar
+            </button>
+            <button onclick="loadSampleData()" class="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-all flex items-center gap-2">
+                <i class="fa-solid fa-flask"></i> Exemplo
+            </button>
+            <button onclick="exportExcel()" class="px-6 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl shadow-lg transition-all flex items-center gap-2">
+                <i class="fa-solid fa-download"></i> Baixar Excel
+            </button>
+        </div>
+    </nav>
+
+    <main class="flex-1 flex flex-col lg:flex-row px-8 pb-8 gap-6 overflow-hidden">
+        <aside class="flex flex-col gap-4 w-full lg:w-[380px] flex-shrink-0 h-full overflow-hidden">
+            <div class="flex bg-white/50 p-1 rounded-2xl glass-panel shadow-sm border border-white">
+                <button onclick="switchTab('import')" id="tab-btn-import" class="flex-1 py-2.5 text-xs font-bold rounded-xl transition-all bg-white shadow-sm text-brand-600">Importar</button>
+                <button onclick="switchTab('history')" id="tab-btn-history" class="flex-1 py-2.5 text-xs font-bold rounded-xl transition-all text-slate-500 hover:text-brand-600">Histórico</button>
+            </div>
+
+            <div id="tab-import" class="flex flex-col gap-4 h-full overflow-y-auto custom-scroll pr-1 pb-2">
+                <div id="upload-area" onclick="triggerFileUpload()" class="glass-panel rounded-[2rem] p-1 relative overflow-hidden group cursor-pointer transition-all hover:shadow-2xl hover:border-brand-200 min-h-[160px] flex-shrink-0">
+                    <div class="absolute inset-0 bg-gradient-to-br from-brand-50 to-white opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                    <div class="border-2 border-dashed border-slate-200 group-hover:border-brand-300 rounded-[1.75rem] p-6 flex flex-col items-center justify-center text-center relative z-10 h-full">
+                        <div class="w-12 h-12 bg-white rounded-2xl flex items-center justify-center mb-3 shadow-sm text-brand-500 group-hover:scale-110 transition-transform">
+                            <i class="fa-solid fa-cloud-arrow-up text-xl"></i>
+                        </div>
+                        <h3 class="text-slate-800 font-bold text-sm mb-1">Importar Base</h3>
+                        <p class="text-[10px] text-slate-400">PDF, Excel ou CSV.</p>
+                    </div>
+                </div>
+
+                <div class="glass-panel rounded-[2rem] p-6 flex flex-col flex-1 shadow-sm min-h-[220px]">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-sm font-bold text-slate-800">Entrada Manual</h3>
+                        <div class="flex gap-2">
+                            <button onclick="aiMagicClean()" class="text-[10px] font-bold bg-accent-500 text-white px-3 py-2 rounded-xl hover:bg-accent-600 transition-all flex items-center gap-1 shadow-lg shadow-accent-500/20">
+                                <i class="fa-solid fa-wand-magic-sparkles"></i> AI
+                            </button>
+                            <button onclick="processManualText()" class="text-[10px] font-bold bg-brand-600 text-white px-4 py-2 rounded-xl hover:bg-brand-700 transition-all shadow-lg shadow-brand-500/20">PROCESSAR</button>
+                        </div>
+                    </div>
+                    <textarea id="manual-text-input" class="w-full flex-1 text-xs p-4 bg-white/60 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-brand-500/10 outline-none resize-none font-mono custom-scroll" placeholder="Cole os dados aqui..."></textarea>
+                </div>
+            </div>
+
+            <div id="tab-history" class="hidden flex-col gap-3 h-full overflow-y-auto custom-scroll pr-1 pb-4">
+                <div id="history-list" class="flex flex-col gap-2.5"></div>
+            </div>
+        </aside>
+
+        <section class="flex-1 glass-panel rounded-[2.5rem] shadow-sm flex flex-col overflow-hidden relative border border-white/80">
+            <div class="px-8 py-5 border-b border-slate-100 bg-white/40 backdrop-blur-md flex flex-col gap-5 z-20">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <div class="w-2.5 h-2.5 rounded-full bg-brand-500 animate-pulse"></div>
+                        <h2 class="text-base font-bold text-slate-800" id="table-title">Contatos Extraídos</h2>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        
+                        <!-- Botões de Filtro -->
+                        <div class="flex gap-2">
+                            <button onclick="setFilterMode('all')" id="btn-filter-all" class="filter-btn active-all">
+                                <i class="fa-solid fa-list"></i> Todos
+                            </button>
+                            <button onclick="setFilterMode('valid')" id="btn-filter-valid" class="filter-btn">
+                                <i class="fa-solid fa-check-circle"></i> Válidos
+                            </button>
+                            <button onclick="setFilterMode('error')" id="btn-filter-error" class="filter-btn">
+                                <i class="fa-solid fa-triangle-exclamation"></i> Erros 
+                                <span id="error-count-badge" class="bg-red-100 text-red-600 px-1.5 rounded-md text-[9px] font-extrabold hidden ml-1 border border-red-200">0</span>
+                            </button>
+                        </div>
+
+                        <span id="row-count-badge" class="text-[11px] font-bold bg-white text-slate-500 px-4 py-2 rounded-xl border border-slate-100 shadow-sm flex items-center gap-2">
+                            <i class="fa-solid fa-layer-group text-slate-400"></i> 0
+                        </span>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-4 items-center">
+                    <div class="relative">
+                        <button onclick="toggleDropdown()" class="flex items-center gap-3 bg-white border border-slate-200 text-slate-600 px-5 py-2.5 rounded-xl text-xs font-bold hover:border-brand-400 hover:bg-brand-50/30 transition-all shadow-sm">
+                            <i class="fa-solid fa-filter text-brand-500"></i> Filtrar Cargos <span id="filter-count" class="bg-brand-600 text-white px-2 rounded-full text-[10px] hidden">0</span>
+                        </button>
+                        <div id="cargo-dropdown" class="dropdown-content absolute top-full left-0 mt-3 p-4 bg-white">
+                            <div class="relative mb-3">
+                                <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                                <input type="text" id="cargo-search" placeholder="Pesquisar cargo..." onkeyup="filterCargoOptions()" class="w-full text-xs pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-brand-500/20">
+                            </div>
+                            <div class="flex gap-2 mb-3">
+                                <button onclick="selectAllCargos(true)" class="text-[10px] font-bold text-brand-600 flex-1 py-1.5 hover:bg-brand-50 rounded-lg">Selecionar Todos</button>
+                                <button onclick="selectAllCargos(false)" class="text-[10px] font-bold text-slate-500 flex-1 py-1.5 hover:bg-slate-50 rounded-lg">Limpar Filtro</button>
+                            </div>
+                            <div id="cargo-options-list" class="flex flex-col gap-1 overflow-y-auto custom-scroll max-h-[350px] pr-1"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="h-6 w-px bg-slate-200 mx-1"></div>
+                    
+                    <div class="flex items-center gap-3">
+                        <label class="relative inline-flex items-center cursor-pointer select-none">
+                            <input type="checkbox" id="whatsapp-toggle" class="sr-only peer" onchange="applyFilters()">
+                            <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full transition-all peer-checked-bg"></div>
+                            <div class="absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-all peer-checked-dot shadow-sm"></div>
+                            <span class="ml-3 text-xs font-semibold text-slate-600">Apenas WhatsApp</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="table-container" class="overflow-auto custom-scroll flex-1 bg-white/40" onscroll="handleTableScroll()">
+                <table class="w-full text-left border-separate border-spacing-0">
+                    <thead class="sticky top-0 z-10 bg-white/90 backdrop-blur-sm text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100">
+                        <tr>
+                            <th class="px-4 py-4 w-[50px] text-center text-slate-400"><i class="fa-solid fa-sliders"></i></th>
+                            <th class="px-6 py-4 min-w-[200px]">Email</th>
+                            <th class="px-6 py-4 min-w-[220px]">Nome</th>
+                            <th class="px-6 py-4 min-w-[150px]">Cargo</th>
+                            <th class="px-6 py-4 min-w-[150px]">Linkedin</th>
+                            <th class="px-6 py-4 min-w-[160px] text-brand-600">Celular</th>
+                            <th class="px-6 py-4 min-w-[120px]">Cidade</th>
+                            <th class="px-6 py-4 min-w-[60px]">UF</th>
+                            <th class="px-6 py-4 min-w-[160px]">CNPJ</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body" class="divide-y divide-slate-50 text-[13px] text-slate-600">
+                        <tr><td colspan="9" class="px-6 py-40 text-center text-slate-300 italic">Arraste um arquivo ou cole dados manuais</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div class="signature">Danilo Kobayashi</div>
+    <div id="toast" class="fixed top-6 left-1/2 -translate-x-1/2 z-50 transform -translate-y-24 opacity-0 transition-all duration-500 pointer-events-none">
+        <div class="glass-panel px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 bg-white/90 font-bold text-slate-700 text-xs border border-brand-100">
+            <i class="fa-solid fa-circle-check text-brand-500"></i><span id="toast-message"></span>
+        </div>
+    </div>
+
+    <script>
+        const apiKey = "";
+        let rawData = [], filteredData = [], currentLimit = 100, selectedCargos = new Set(), currentFilterMode = 'all', currentFileName = "Base";
+        let uniqueCargosList = [];
+        let selectedRowId = null;
+
+        const ROLES_WHITELIST = [
+            "COORDENADOR", "ADMINISTRADOR", "DIRETOR", "GERENTE", "CEO", "PRESIDENTE", 
+            "CFO", "CTO", "COO", "ANALISTA", "SUPERVISOR", "CONSULTOR", "PROPRIETÁRIO", 
+            "FOUNDER", "EXECUTIVO", "HEAD", "LEAD", "GESTOR", "CONTADOR", "ADVOGADO", 
+            "SÓCIO", "SOCIO", "REPRESENTANTE", "ASSISTENTE", "AUXILIAR"
+        ];
+
+        function showToast(m) { 
+            const t = document.getElementById('toast'); 
+            const msg = document.getElementById('toast-message');
+            msg.textContent = m; t.classList.remove('-translate-y-24', 'opacity-0'); 
+            setTimeout(() => t.classList.add('-translate-y-24', 'opacity-0'), 3000); 
+        }
+
+        function switchTab(name) {
+            document.getElementById('tab-import').classList.toggle('hidden', name !== 'import');
+            document.getElementById('tab-history').classList.toggle('hidden', name !== 'history');
+            document.getElementById('tab-btn-import').className = name === 'import' ? "flex-1 py-2.5 text-xs font-bold rounded-xl transition-all bg-white shadow-sm text-brand-600" : "flex-1 py-2.5 text-xs font-bold rounded-xl transition-all text-slate-500 hover:text-brand-600";
+            document.getElementById('tab-btn-history').className = name === 'history' ? "flex-1 py-2.5 text-xs font-bold rounded-xl transition-all bg-white shadow-sm text-brand-600" : "flex-1 py-2.5 text-xs font-bold rounded-xl transition-all text-slate-500 hover:text-brand-600";
+            if(name === 'history') renderHistoryList();
+        }
+
+        function limparTexto(txt) {
+            if (!txt) return '';
+            return txt.toString().replace(/\s+(Yes|Yes\s\d+|Aalok|Industria|Comercio|S\/S|Ltda|SA|Mei|Eireli|Word).*$/gi, '')
+                      .replace(/\s+\d+$/g, '')
+                      .trim();
+        }
+
+        function isCorporateName(name) {
+            if (!name) return false;
+            const corporatePattern = /(?:^|\s)(LTDA|S\/A|S\.A|S\/S|EIRELI|ME|EPP|INC|LLC|GMBH|C\.V|HOLDING|PARTICIPACOES|SERVICOS|COMERCIO|INDUSTRIA|SOLUCOES|TECNOLOGIA|EDUCACAO|ADVOCACIA|CONTABILIDADE|ENGENHARIA|CONSULTORIA|CONDOMINIO|ASSOC|IGREJA|HOSPITAL|PREFEITURA|SECRETARIA|CARTORIO|BANCO|COOPERATIVA|SUPERMERCADO|FARMACIA|DROGARIA|AUTO|MOTO|CLINICA|ESCRITORIO|GRUPO|SISTEMAS|TELECOM|LOGISTICA|TRANSPORTES|VIAGENS|TURISMO|IMOVEIS|IMOBILIARIA|CONSTRUTORA|INCORPORADORA|ATACADO|VAREJO|RESTAURANTE|BUFFET|PADARIA|LANCHONETE|PIZZARIA|BAR|HOTEL|POUSADA|MOTEL|RESORT|SPA|BELEZA|ESTETICA|MODA|CONFECCOES|TEXTIL|CALCADOS|JOIAS|OTICA|RELJOARIA|PRESENTES|BRINQUEDOS|PAPELARIA|LIVRARIA|GRAFICA|EDITORA|PUBLICIDADE|MARKETING|EVENTOS|PRODUCOES|STUDIO|OFICINA|MECANICA|ELETRICA|HIDRAULICA|PINTURA|MARCENARIA|SERRALHERIA|VIDRACARIA|LAVANDERIA|PET|VET|AGRO|FAZENDA|SITIO|CHACARA|GRANJA|HARAS|PESCA|NAUTICA|CLUBE|ACADEMIA|ESCOLA|COLEGIO|FACULDADE|UNIVERSIDADE|CURSO|TREINAMENTO|IDIOMAS|INFORMATICA|INTERNET|WEB|DESIGN|FOTO|VIDEO|SOM|ILUMINACAO|SEGURANCA|LIMPEZA|CONSERVACAO|MANUTENCAO|JARDINAGEM|PAISAGISMO|DECORACAO|ARQUITETURA|URBANISMO)(?:\s|$|[.,;])/i;
+            const prefixPattern = /^Empresa de\s/i;
+            return corporatePattern.test(name) || prefixPattern.test(name);
+        }
+
+        function formatarNome(nome) {
+            if (!nome) return '';
+            return limparTexto(nome).toLowerCase().split(' ').map(p => {
+                const preps = ["da", "de", "do", "das", "dos", "e"];
+                return preps.includes(p) ? p : (p.charAt(0).toUpperCase() + p.slice(1));
+            }).join(' ').trim();
+        }
+
+        function cleanCargoField(cargo) {
+            if (!cargo || typeof cargo !== 'string') return "Indefinido";
+            let clean = cargo.replace(/^\d+[\s-]*/, '').trim();
+            if (clean.toUpperCase().includes("TITULAR PESSOA")) return "Sócio/Titular";
+            if (clean.toUpperCase().includes("RESIDENTE OU DOMICILIADO")) return "Sócio";
+            if (clean.length > 50 && clean.toUpperCase().includes("PESSOA FÍSICA")) return "Sócio";
+            clean = clean.replace(/\bSocio\b/i, "Sócio");
+            if (clean.length > 40) {
+                 clean = clean.split(/[;,]/)[0];
+            }
+            return clean.charAt(0).toUpperCase() + clean.slice(1);
+        }
+
+        function extractPhones(text) {
+            if (!text) return "";
+            const candidates = text.toString().match(/(?:(?:\+|00)?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{3,5}[\s-]?\d{4}/g) || [];
+            
+            const validPhones = new Set();
+            
+            candidates.forEach(part => {
+                let digits = part.replace(/\D/g, '');
+                
+                if (digits.startsWith('55') && digits.length >= 12) {
+                    digits = digits.substring(2);
+                }
+                
+                if (digits.length === 10 || digits.length === 11) {
+                    if (parseInt(digits.substring(0, 2)) > 10) {
+                        const ddd = digits.substring(0, 2);
+                        const num = digits.substring(2);
+                        let formatted = '';
+                        if (digits.length === 11) {
+                            formatted = `(${ddd}) ${num.substring(0, 1)} ${num.substring(1, 5)}-${num.substring(5)}`;
+                        } else {
+                            formatted = `(${ddd}) ${num.substring(0, 4)}-${num.substring(4)}`;
+                        }
+                        validPhones.add(formatted);
+                    }
+                }
+            });
+            
+            return Array.from(validPhones).join(' / ');
+        }
+
+        // Updated parseLineText to handle comma separation if detected
+        function parseLineText(line) {
+            if (!line || !line.trim()) return null;
+            
+            // Try to detect if it's a CSV line (has multiple commas)
+            if ((line.match(/,/g) || []).length > 3) {
+               // Likely a CSV row that failed structured parsing
+               // Split by comma respecting quotes (simplified)
+               // Simple split for now as complex CSV regex is heavy
+               const parts = line.split(',');
+               // If parts look like the expected columns, try to map them
+               // Assuming standard Ploomes export order: 
+               // Nome, CNPJ, Empresa, Cliente, Telefones, Email, Cargo, Contatos...
+               // Index 0: Nome
+               // Index 1: CNPJ
+               // Index 4: Telefones
+               // Index 5: Email
+               // Index 6: Cargo
+               if (parts.length >= 7) {
+                   let nome = parts[0] || "";
+                   let email = parts[5] || "";
+                   let cargoRaw = parts[6] || "";
+                   let telRaw = parts[4] || "";
+                   let cnpj = parts[1] || "";
+                   let linkedin = ""; // Not standard
+                   
+                   // Check backups for Name if corporate
+                   if (isCorporateName(nome)) {
+                       // Try Contatos (index 7) or Comprador (index 8)
+                       let potentialName = parts[7] || parts[8];
+                       if (potentialName && !isCorporateName(potentialName) && potentialName.length > 2) {
+                           nome = potentialName;
+                       }
+                   }
+                   
+                   return {
+                       id: Math.random().toString(36).substr(2, 9),
+                       email: email.trim(),
+                       nome: formatarNome(nome),
+                       cargo: cleanCargoField(cargoRaw),
+                       linkedin: "",
+                       celular: extractPhones(telRaw),
+                       cidade: "", uf: "", 
+                       cnpj: cnpj.trim(),
+                       manualStatus: null
+                   };
+               }
+            }
+
+            // Fallback for non-CSV lines (raw copy-paste)
+            let original = line;
+            // Remove extracted phones from line to avoid polluting Name/Cargo
+            let extractedPhones = extractPhones(line);
+            let cleanedLine = line;
+            if (extractedPhones) {
+                const phoneParts = extractedPhones.split(' / ');
+                // This logic is tricky because formatted phone != raw text
+                // Simpler: just use regex to remove phone-like patterns
+                cleanedLine = line.replace(/(?:(?:\+|00)?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{3,5}[\s-]?\d{4}/g, " ");
+            }
+
+            const regexes = { 
+                email: /[\w.-]+@[\w.-]+\.\w+/, 
+                cnpj: /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14}/, 
+                linkedin: /linkedin\.com\/[a-zA-Z0-9%-]+/ 
+            };
+            
+            let email = (cleanedLine.match(regexes.email)||[""])[0]; if(email) cleanedLine = cleanedLine.replace(email, " ");
+            let cnpj = (cleanedLine.match(regexes.cnpj)||[""])[0]; if(cnpj) cleanedLine = cleanedLine.replace(cnpj, " ");
+            let linkedin = (cleanedLine.match(regexes.linkedin)||[""])[0]; if(linkedin) cleanedLine = cleanedLine.replace(linkedin, " ");
+            
+            cleanedLine = cleanedLine.replace(/\s+/g, ' ').trim();
+            
+            let nome = "", cargo = "";
+            let upperLine = cleanedLine.toUpperCase();
+            let cargoStartIdx = -1;
+
+            for (let role of ROLES_WHITELIST) {
+                let idx = upperLine.indexOf(role);
+                if (idx !== -1 && (cargoStartIdx === -1 || idx < cargoStartIdx)) {
+                    cargoStartIdx = idx;
+                }
+            }
+
+            if (cargoStartIdx !== -1) {
+                nome = cleanedLine.substring(0, cargoStartIdx).trim();
+                let rawCargo = cleanedLine.substring(cargoStartIdx).trim();
+                cargo = cleanCargoField(rawCargo);
+            } else {
+                let parts = cleanedLine.split(/[;\t|\-–]/).map(p => p.trim());
+                if (parts.length > 1) {
+                    nome = parts[0];
+                    cargo = cleanCargoField(parts.slice(1).join(" "));
+                } else {
+                    nome = cleanedLine;
+                    cargo = "Indefinido";
+                }
+            }
+
+            nome = formatarNome(nome);
+            if (!nome || nome.length < 2) return null;
+
+            return { id: Math.random().toString(36).substr(2, 9), email, nome, cargo, linkedin, celular: extractedPhones, cidade: "", uf: "", cnpj, manualStatus: null };
+        }
+
+        function parseRowStructured(row, headers) {
+            const idx = {
+                nome: headers.findIndex(h => h.match(/nome|cliente/i)),
+                email: headers.findIndex(h => h.match(/e-?mail/i)),
+                cargo: headers.findIndex(h => h.match(/cargo|função|role/i)),
+                telefone: headers.findIndex(h => h.match(/telefones?|celular|mobile|phone/i)), // Removed generic 'contato' to prioritize explicit phone columns
+                cnpj: headers.findIndex(h => h.match(/cnpj/i)),
+                empresa: headers.findIndex(h => h.match(/^empresa$/i)), // Strict match for Empresa to avoid CNPJ column
+                linkedin: headers.findIndex(h => h.match(/linkedin/i))
+            };
+
+            // If we can't find basic columns, assume headerless or misaligned, fallback to text parser
+            if (idx.nome === -1 && idx.email === -1) return parseLineText(row.join(","));
+
+            let nome = idx.nome !== -1 ? (row[idx.nome] || "") : "";
+            let email = idx.email !== -1 ? (row[idx.email] || "") : "";
+            let cargoRaw = idx.cargo !== -1 ? (row[idx.cargo] || "") : "";
+            let telRaw = idx.telefone !== -1 ? (row[idx.telefone] || "") : "";
+            let cnpj = idx.cnpj !== -1 ? (row[idx.cnpj] || "") : "";
+            let linkedin = idx.linkedin !== -1 ? (row[idx.linkedin] || "") : "";
+            
+            if (isCorporateName(nome)) {
+                const backupCols = headers.map((h, i) => i).filter(i => 
+                    headers[i].match(/contato|comprador|responsavel|socio/i) && i !== idx.nome
+                );
+                let foundPerson = false;
+                for (let i of backupCols) {
+                    let potentialName = row[i];
+                    if (potentialName && !isCorporateName(potentialName) && potentialName.length > 2) {
+                        nome = potentialName;
+                        foundPerson = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!nome && headers.findIndex(h => h.match(/comprador/i)) !== -1) {
+                nome = row[headers.findIndex(h => h.match(/comprador/i))] || "";
+            }
+
+            nome = formatarNome(nome);
+            if (!nome || nome.length < 2) return null;
+
+            let cargo = cleanCargoField(cargoRaw);
+            let celular = extractPhones(telRaw);
+
+            return { id: Math.random().toString(36).substr(2, 9), email, nome, cargo, linkedin, celular, cidade: "", uf: "", cnpj, manualStatus: null };
+        }
+
+        async function aiMagicClean() {
+            const input = document.getElementById('manual-text-input').value;
+            if(!input.trim()) return showToast("Insira texto.");
+            showToast("IA Debugando...");
+            try {
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: `Extraia contatos corrigindo nomes e cargos. Remova lixo de sistema como "Yes 05". Campos: Email, Nome, Cargo, Linkedin, celular, cidade, uf, CNPJ. Retorne array JSON. Texto: ${input}` }] }],
+                        generationConfig: { responseMimeType: "application/json" }
+                    })
+                });
+                const json = await res.json();
+                const data = JSON.parse(json.candidates[0].content.parts[0].text);
+                finishLoading(data.map(item => ({
+                    id: Math.random().toString(36).substr(2, 9),
+                    email: item.Email || item.email || '',
+                    nome: formatarNome(item.Nome || item.nome || ''),
+                    cargo: cleanCargoField(item.Cargo || item.cargo),
+                    linkedin: item.Linkedin || item.linkedin || '',
+                    celular: extractPhones(item.celular || item.Celular || ''),
+                    cidade: item.cidade || '', uf: item.uf || '', cnpj: item.CNPJ || item.cnpj || '',
+                    manualStatus: null
+                })), "AI Clean Import");
+            } catch (e) { showToast("Erro no processamento IA."); }
+        }
+
+        function validateData(d) {
+            let err = 0;
+            d.forEach(r => {
+                let autoError = false;
+                let autoTypes = [];
+
+                if (r.celular && r.celular.includes(' / ')) {
+                    autoError = true;
+                    autoTypes.push('Muitos Telefones');
+                }
+
+                if (r.nome) {
+                    if (isCorporateName(r.nome)) {
+                        autoError = true;
+                        autoTypes.push('Nome Corporativo');
+                    }
+                    if (r.nome.includes(';') || (r.nome.split(' ').length > 6 && r.nome.includes('/'))) {
+                        autoError = true;
+                        autoTypes.push('Múltiplos Nomes');
+                    }
+                    if (/[\d]{4,}/.test(r.nome) || /\(\d{2}\)/.test(r.nome)) {
+                        autoError = true;
+                        autoTypes.push('Telefone no Nome');
+                    }
+                    if (r.nome.includes('@')) {
+                        autoError = true;
+                        autoTypes.push('Email no Nome');
+                    }
+                }
+
+                if (r.manualStatus === 'valid') {
+                    r.hasError = false;
+                    r.errorType = [];
+                } else if (r.manualStatus === 'error') {
+                    r.hasError = true;
+                    r.errorType = r.errorType && r.errorType.length ? r.errorType : ['Erro Manual'];
+                } else {
+                    r.hasError = autoError;
+                    r.errorType = autoTypes;
+                }
+
+                if (r.hasError) err++;
+            });
+            
+            const badge = document.getElementById('error-count-badge');
+            if (badge) {
+                badge.textContent = err;
+                badge.classList.toggle('hidden', err === 0);
+            }
+            return d;
+        }
+
+        window.toggleStatus = (id, event) => {
+            event.stopPropagation();
+            const row = rawData.find(r => r.id === id);
+            if (row) {
+                if (row.hasError) {
+                    row.manualStatus = 'valid';
+                } else {
+                    row.manualStatus = 'error';
+                }
+                validateData(rawData);
+                renderTableChunks();
+                if(currentFilterMode !== 'all') applyFilters(); 
+            }
+        }
+
+        window.setFilterMode = (mode) => {
+            currentFilterMode = mode;
+            document.querySelectorAll('.filter-btn').forEach(b => {
+                b.classList.remove('active-all', 'active-valid', 'active-error');
+            });
+            const btn = document.getElementById(`btn-filter-${mode}`);
+            if(btn) {
+                if(mode === 'all') btn.classList.add('active-all');
+                if(mode === 'valid') btn.classList.add('active-valid');
+                if(mode === 'error') btn.classList.add('active-error');
+            }
+            applyFilters();
+        }
+
+        async function renderHistoryList() {
+            const list = document.getElementById('history-list'); if (!list) return;
+            const user = window.currentUser; if (!user) return;
+            const { db, appId, collection, onSnapshot } = window.firebase;
+            onSnapshot(collection(db, `artifacts/${appId}/users/${user.uid}/history`), (snapshot) => {
+                list.innerHTML = '';
+                const items = [];
+                snapshot.forEach(doc => items.push({ docId: doc.id, ...doc.data() }));
+                items.sort((a, b) => b.timestamp - a.timestamp);
+                if(!items.length) { list.innerHTML = '<div class="text-center py-10 text-slate-400 text-xs italic">Vazio</div>'; return; }
+                items.forEach(i => {
+                    const div = document.createElement('div');
+                    div.className = "bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md cursor-pointer transition-all relative group";
+                    div.onclick = () => loadHistoryItem(i.docId, i);
+                    div.innerHTML = `
+                        <div class="flex justify-between items-start mb-1">
+                            <h4 class="font-bold text-[13px] text-slate-700 truncate pr-6">${i.name}</h4>
+                            <span class="text-[9px] font-bold text-slate-300">${i.date.split(' ')[0]}</span>
+                        </div>
+                        <div class="flex flex-wrap gap-1 mt-2">
+                            ${(i.tags || []).slice(0, 3).map(t => `<span class="px-2 py-0.5 bg-brand-50 text-brand-600 rounded-md text-[9px] font-bold border border-brand-100">${t}</span>`).join('')}
+                        </div>
+                        <div class="flex justify-between items-center mt-3 pt-2 border-t border-slate-50">
+                            <span class="text-[10px] font-bold text-slate-400">${i.count || i.data.length} contatos</span>
+                            <button onclick="deleteHistoryItem('${i.docId}', event)" class="p-1.5 text-red-200 hover:text-red-500"><i class="fa-solid fa-trash-can"></i></button>
+                        </div>`;
+                    list.appendChild(div);
+                });
+            });
+        }
+
+        async function addToHistory(n, d, t = []) {
+            const user = window.currentUser; if (!user || d.length === 0) return;
+            const { db, appId, doc, setDoc } = window.firebase;
+            const itemId = Date.now().toString();
+            try {
+                if (JSON.stringify(d).length > 980000) return; 
+                await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'history', itemId), {
+                    id: itemId, name: n, date: new Date().toLocaleString('pt-BR'), timestamp: Date.now(), data: d, tags: t, count: d.length
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        async function deleteHistoryItem(id, event) { 
+            event.stopPropagation();
+            const user = window.currentUser; if (!user) return;
+            const { db, appId, doc, deleteDoc } = window.firebase;
+            await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'history', id));
+        }
+
+        function loadHistoryItem(id, dataObject) {
+            rawData = dataObject.data; 
+            rawData.forEach(r => { if(r.manualStatus === undefined) r.manualStatus = null; });
+            currentFileName = dataObject.name.split(' [')[0]; 
+            validateData(rawData);
+            selectedCargos.clear(); 
+            (dataObject.tags || []).forEach(t => selectedCargos.add(t));
+            updateCargoCache();
+            updateCargoFilterOptions(); 
+            applyFilters();
+            document.getElementById('table-title').textContent = dataObject.name;
+            showToast("Restaurado com Filtros!");
+        }
+
+        function updateCargoCache() {
+            const cargosSet = new Set();
+            for(let r of rawData) if(r.cargo) cargosSet.add(r.cargo);
+            uniqueCargosList = Array.from(cargosSet).sort();
+        }
+
+        function updateCargoFilterOptions() {
+            const list = document.getElementById('cargo-options-list'); if(!list) return;
+            const scrollPos = list.scrollTop; 
+
+            const query = document.getElementById('cargo-search').value.toLowerCase();
+            const filtered = uniqueCargosList.filter(c => c.toLowerCase().includes(query));
+            const limit = 60;
+            list.innerHTML = '';
+            filtered.slice(0, limit).forEach(c => {
+                const div = document.createElement('div');
+                div.className = "flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors";
+                const active = selectedCargos.has(c);
+                div.innerHTML = `
+                    <div class="w-5 h-5 rounded border-2 ${active ? 'bg-brand-600 border-brand-600' : 'border-slate-300'} flex items-center justify-center">
+                        ${active ? '<i class="fa-solid fa-check text-white text-[10px]"></i>' : ''}
+                    </div>
+                    <span class="text-[11px] font-medium ${active ? 'text-brand-700' : 'text-slate-600'} truncate">${c}</span>
+                `;
+                div.onclick = (e) => {
+                    e.stopPropagation(); 
+                    active ? selectedCargos.delete(c) : selectedCargos.add(c);
+                    updateFilterBadge();
+                    updateCargoFilterOptions();
+                    applyFilters();
+                };
+                list.appendChild(div);
+            });
+            if(filtered.length > limit) {
+                const div = document.createElement('div');
+                div.className = "py-2 text-center text-[10px] text-slate-400 italic";
+                div.textContent = `+ ${filtered.length - limit} outros (use a busca)`;
+                list.appendChild(div);
+            }
+            updateFilterBadge();
+            list.scrollTop = scrollPos; 
+        }
+
+        function updateFilterBadge() {
+            const b = document.getElementById('filter-count');
+            b.textContent = selectedCargos.size; b.classList.toggle('hidden', selectedCargos.size === 0);
+        }
+
+        window.filterCargoOptions = () => updateCargoFilterOptions();
+        window.selectAllCargos = (s) => {
+            const query = document.getElementById('cargo-search').value.toLowerCase();
+            uniqueCargosList.filter(c => c.toLowerCase().includes(query)).forEach(c => s ? selectedCargos.add(c) : selectedCargos.delete(c));
+            updateCargoFilterOptions(); applyFilters();
+        }
+
+        window.applyFilters = () => {
+            const w = document.getElementById('whatsapp-toggle').checked;
+            filteredData = rawData.filter(r => {
+                if (currentFilterMode === 'valid' && r.hasError) return false;
+                if (currentFilterMode === 'error' && !r.hasError) return false;
+
+                if (w) {
+                    const nums = (r.celular || '').split(' / ');
+                    const hasMobile = nums.some(n => {
+                        const clean = n.replace(/\D/g, '');
+                        return clean.length === 11 && clean[2] === '9';
+                    });
+                    if (!hasMobile) return false;
+                }
+                
+                if (selectedCargos.size > 0 && !selectedCargos.has(r.cargo)) return false;
+                
+                return true;
+            });
+            currentLimit = 100;
+            renderTableChunks();
+        }
+
+        function handleTableScroll() {
+            const container = document.getElementById('table-container');
+            if (container.scrollHeight - container.scrollTop <= container.clientHeight + 200) {
+                if (currentLimit < filteredData.length) {
+                    currentLimit += 100;
+                    renderTableChunks();
+                }
+            }
+        }
+
+        window.selectRow = (id) => {
+            selectedRowId = id;
+            renderTableChunks();
+        }
+
+        function renderTableChunks() {
+            const body = document.getElementById('table-body');
+            const chunk = filteredData.slice(0, currentLimit);
+            document.getElementById('row-count-badge').innerHTML = `<i class="fa-solid fa-layer-group text-slate-400"></i> ${filteredData.length}`;
+            if(!filteredData.length) { body.innerHTML = '<tr><td colspan="9" class="px-6 py-20 text-center text-slate-300 italic">Sem resultados</td></tr>'; return; }
+            body.innerHTML = chunk.map(r => `
+                <tr class="${r.id === selectedRowId ? 'selected-row' : ''} ${r.hasError ? 'error-row' : ''} border-b border-slate-50 transition-colors" onclick="selectRow('${r.id}')">
+                    <td class="px-4 py-4 text-center" onclick="toggleStatus('${r.id}', event)">
+                        <button class="status-toggle-btn ${r.hasError ? 'status-error' : 'status-valid'}">
+                            <i class="fa-solid ${r.hasError ? 'fa-triangle-exclamation' : 'fa-check'} text-[10px]"></i>
+                        </button>
+                    </td>
+                    <td class="px-6 py-4 truncate max-w-[160px] text-slate-500" contenteditable="true" onblur="updateCell('${r.id}', 'email', this.innerText)">${r.email||''}</td>
+                    <td class="px-6 py-4 font-bold text-slate-800" contenteditable="true" onblur="updateCell('${r.id}', 'nome', this.innerText)">
+                        ${r.hasError && r.errorType ? r.errorType.map(e => `<span class="error-badge">${e}</span>`).join('') : ''}
+                        ${r.nome}
+                    </td>
+                    <td class="px-6 py-4"><span class="px-2 py-1 bg-slate-100 text-slate-600 text-[10px] font-bold rounded-lg">${r.cargo}</span></td>
+                    <td class="px-6 py-4 truncate max-w-[140px]" contenteditable="true" onblur="updateCell('${r.id}', 'linkedin', this.innerText)">${r.linkedin||'-'}</td>
+                    <td class="px-6 py-4 font-mono text-[12px] font-semibold" contenteditable="true" onblur="updateCell('${r.id}', 'celular', this.innerText)">${(r.celular && r.celular.includes(' / ')) ? `<span class="text-red-500">${r.celular}</span>` : (r.celular || '-')}</td>
+                    <td class="px-6 py-4 text-slate-500" contenteditable="true" onblur="updateCell('${r.id}', 'cidade', this.innerText)">${r.cidade||''}</td>
+                    <td class="px-6 py-4 text-center" contenteditable="true" onblur="updateCell('${r.id}', 'uf', this.innerText)">${r.uf||''}</td>
+                    <td class="px-6 py-4 text-[11px] text-slate-400 font-mono" contenteditable="true" onblur="updateCell('${r.id}', 'cnpj', this.innerText)">${r.cnpj||''}</td>
+                </tr>
+            `).join('');
+        }
+
+        window.exportExcel = () => {
+            const final = filteredData.filter(r => !r.hasError);
+            if(!final.length) return showToast("Sem dados válidos.");
+            
+            const activeTags = Array.from(selectedCargos);
+            const historyName = activeTags.length > 0 
+                ? `${currentFileName} [${activeTags.join(', ')}]` 
+                : currentFileName;
+            
+            addToHistory(historyName, final, activeTags);
+
+            const ws = XLSX.utils.json_to_sheet(final.map(r => ({ 
+                'Email': r.email, 
+                'Nome': r.nome, 
+                'Cargo': r.cargo, 
+                'Linkedin': r.linkedin, 
+                'Celular': r.celular, 
+                'Cidade': r.cidade, 
+                'UF': r.uf, 
+                'CNPJ': r.cnpj 
+            })), { header: ['Email', 'Nome', 'Cargo', 'Linkedin', 'Celular', 'Cidade', 'UF', 'CNPJ'] });
+            
+            const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Contatos");
+            XLSX.writeFile(wb, `${currentFileName.split('.')[0]}_Clean.xlsx`);
+            showToast("Excel baixado!");
+        }
+
+        window.handleFileUpload = (e) => {
+            const f = e.target.files[0]; if(!f) return;
+            currentFileName = f.name; showToast("Processando...");
+            const reader = new FileReader();
+            reader.onload = ev => {
+                const wb = XLSX.read(new Uint8Array(ev.target.result), {type: 'array'});
+                const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header: 1});
+                
+                let headers = json[0] || [];
+                const hasHeader = headers.some(h => typeof h === 'string' && h.match(/nome|email|cargo|empresa/i));
+                
+                let rows = [];
+                if (hasHeader) {
+                    rows = json.slice(1).map(r => parseRowStructured(r, headers)).filter(x => x);
+                } else {
+                    rows = json.map(r => parseLineText(r.join(" "))).filter(x => x);
+                }
+                
+                finishLoading(rows, f.name);
+            }; reader.readAsArrayBuffer(f);
+            e.target.value = '';
+        }
+
+        function finishLoading(d, n) {
+            rawData = validateData(d); selectedCargos.clear();
+            updateCargoCache(); updateCargoFilterOptions(); applyFilters();
+            document.getElementById('table-title').textContent = n;
+            showToast(`${d.length} registros extraídos!`);
+            addToHistory(n, rawData);
+        }
+
+        window.processManualText = () => {
+            const txt = document.getElementById('manual-text-input').value; if(!txt.trim()) return;
+            const rows = txt.split('\n').map(l => parseLineText(l)).filter(x => x);
+            rows.length ? finishLoading(rows, "Manual Import") : showToast("Dados insuficientes.");
+        }
+
+        window.updateCell = (id, f, v) => {
+            const idx = rawData.findIndex(r => r.id === id);
+            if(idx !== -1) { rawData[idx][f] = v.trim(); validateData(rawData); }
+        }
+
+        window.clearTable = () => { rawData = []; applyFilters(); updateCargoFilterOptions(); }
+        window.triggerFileUpload = () => document.getElementById('file-upload-input').click();
+        window.toggleDropdown = () => document.getElementById('cargo-dropdown').classList.toggle('show');
+        window.loadSampleData = () => finishLoading([{ id: '1', email: 'contato@dalago.com', nome: 'Antônio Carlos Dalago', cargo: 'Sócio Administrador', linkedin: '-', celular: '(41) 99730-2370', cidade: 'Curitiba', uf: 'PR', cnpj: '' }], "Exemplo");
+        window.onclick = (e) => { if (!e.target.closest('.relative') && !e.target.closest('button')) document.getElementById('cargo-dropdown')?.classList.remove('show'); };
+        window.switchTab = switchTab;
+        window.renderHistoryList = renderHistoryList;
+    </script>
+</body>
+</html>
